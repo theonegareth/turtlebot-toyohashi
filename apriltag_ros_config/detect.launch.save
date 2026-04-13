@@ -1,0 +1,19 @@
+<launch>
+  <arg name="node_namespace" default="apriltag_ros_continuous_node" />
+
+  <rosparam command="load" file="$(env HOME)/catkin_ws/src/apriltag_ros/config/settings.yaml" ns="$(arg node_namespace)" />
+  
+  <rosparam command="load" file="$(env HOME)/catkin_ws/src/apriltag_ros/config/tags.yaml" ns="$(arg node_namespace)" />
+
+  <node pkg="apriltag_ros" type="apriltag_ros_continuous_node" name="$(arg node_namespace)" clear_params="true" output="screen">
+    
+    <remap from="image_topic" to="/raspicam_node/image" />
+    <remap from="camera_info" to="/raspicam_node/camera_info" />
+
+    <param name="publish_tag_detections_image" type="bool" value="true" />
+    
+    <param name="image_transport" type="string" value="compressed" />
+    
+    <param name="publish_tf" type="bool" value="true" />
+  </node>
+</launch>
