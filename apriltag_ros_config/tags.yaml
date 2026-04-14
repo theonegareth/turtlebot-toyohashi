@@ -21,3 +21,7 @@ standalone_tags:
     {id: 18, size: 0.0385, name: "tag_18"},
     {id: 19, size: 0.0385, name: "tag_19"}
   ]
+
+tag_bundles:
+  [
+  ]
