@@ -15,7 +15,11 @@ class TagMapper:
         # Configuration limits
         self.distance_limit = 1.0  # Max distance in meters to accept a reading
         self.max_count = 100       # Cap the running average weight
-    
+        
+        # Confidence threshold to filter out ghost tags
+        self.required_detections = 5
+        self.pending_tags = {}
+
         # File paths with ROS parameters and default fallbacks
         self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json"))
         self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/snapshots/"))
@@ -86,16 +90,20 @@ class TagMapper:
                 curr_yaw = tf.transformations.euler_from_quaternion(rot)[2]
 
                 if tag_name not in self.saved_waypoints:
-                    # New tag
-                    self.saved_waypoints[tag_name] = {
-                        "x": curr_x,
-                        "y": curr_y,
-                        "yaw": curr_yaw,
-                        "count": 1,
-                        "closest_distance": round(dist, 3)
-                    }
-                    self.save_snapshot(tag_name, dist)
-                    rospy.loginfo("New tag locked: {}".format(tag_name))
+                    # Increment pending count instead of saving immediately
+                    self.pending_tags[tag_name] = self.pending_tags.get(tag_name, 0) + 1
+                    
+                    if self.pending_tags[tag_name] >= self.required_detections:
+                        self.saved_waypoints[tag_name] = {
+                            "x": curr_x,
+                            "y": curr_y,
+                            "yaw": curr_yaw,
+                            "count": 1,
+                            "closest_distance": round(dist, 3)
+                        }
+                        self.save_snapshot(tag_name, dist)
+                        self.save_waypoints() # Save immediately to prevent data loss
+                        rospy.loginfo("New tag officially locked: {}".format(tag_name))
 
                 else:
                     # Update existing tag
@@ -104,7 +112,7 @@ class TagMapper:
 
                     data["x"] += (curr_x - data["x"]) / (n + 1)
                     data["y"] += (curr_y - data["y"]) / (n + 1)
-                    data["yaw"] = curr_yaw 
+                    data["yaw"] += (curr_yaw - data["yaw"]) / (n + 1)
 
                     if n < self.max_count:
                         data["count"] = n + 1
