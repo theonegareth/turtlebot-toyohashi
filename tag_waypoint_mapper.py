@@ -3,72 +3,130 @@ import rospy
 import tf
 import json
 import os
-
-# Import the exact message type broadcasted by the camera
+import cv2
+from cv_bridge import CvBridge, CvBridgeError
+from sensor_msgs.msg import Image
 from apriltag_ros.msg import AprilTagDetectionArray
 
-# Global variables so our callback function can access them
-saved_waypoints = {}
-file_path = os.path.expanduser("~/catkin_ws/src/lab_waypoints.json")
-listener = None
+class TagMapper:
+    def __init__(self):
+        rospy.init_node('dynamic_tag_mapper')
 
-def detection_callback(msg):
-    # This function triggers instantly whenever the camera sees something
+        # Configuration limits
+        self.distance_limit = 1.0  # Max distance in meters to accept a reading
+        self.max_count = 100       # Cap the running average weight
+    
+        # File paths with ROS parameters and default fallbacks
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json"))
+        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/snapshots/"))
 
-    # If the camera sees nothing, just ignore and return
-    if not msg.detections:
-        return
+        if not os.path.exists(self.snapshot_dir):
+            os.makedirs(self.snapshot_dir)
 
-    # Loop through whatever tags the camera is currently looking at
-    for detection in msg.detections:
-        # The node stores IDs as a list, we grab the first one
-        tag_id = detection.id[0]
-        tag_name = f"tag_{tag_id}"
+        # State variables
+        self.saved_waypoints = {}
+        self.latest_image = None
+        self.bridge = CvBridge()
+        self.listener = tf.TransformListener()
 
-        # If we haven't saved this specific tag yet, calculate its permanent location
-        if tag_name not in saved_waypoints:
+        self.load_waypoints()
+        rospy.on_shutdown(self.save_waypoints)
+
+        rospy.sleep(1.0)
+
+        # Subscribers
+        rospy.Subscriber("/tag_detections_image", Image, self.image_callback)
+        rospy.Subscriber("/tag_detections", AprilTagDetectionArray, self.tag_callback)
+
+        rospy.loginfo("Tag Mapper running. Exploring tags...")
+
+    def load_waypoints(self):
+        if os.path.exists(self.json_path):
             try:
-                # Ask TF for the absolute path from 'odom' to this newly spotted tag
-                (trans, rot) = listener.lookupTransform("odom", tag_name, rospy.Time(0))
+                with open(self.json_path, 'r') as f:
+                    self.saved_waypoints = json.load(f)
+                rospy.loginfo("Loaded {} existing waypoints.".format(len(self.saved_waypoints)))
+            except json.JSONDecodeError:
+                rospy.logwarn("JSON corrupted. Starting fresh.")
+                self.saved_waypoints = {}
+        else:
+            rospy.loginfo("No existing JSON found. Starting new session.")
 
-                yaw = tf.transformations.euler_from_quaternion(rot)[2]
+    def save_waypoints(self):
+        rospy.loginfo("Saving waypoints to JSON...")
+        with open(self.json_path, 'w') as f:
+            json.dump(self.saved_waypoints, f, indent=4)
+        rospy.loginfo("Save complete.")
 
-                saved_waypoints[tag_name] = {
-                    "x": round(trans[0], 3),
-                    "y": round(trans[1], 3),
-                    "yaw": round(yaw, 3)
-                }
+    def image_callback(self, msg):
+        try:
+            self.latest_image = self.bridge.imgmsg_to_cv2(msg, "bgr8")
+        except CvBridgeError as e:
+            rospy.logerr("CV Bridge Error: {}".format(e))
 
-                print(f"\n[SUCCESS] New tag detected and locked: {tag_name}!")
-                print(f"X: {saved_waypoints[tag_name]['x']}m | Y: {saved_waypoints[tag_name]['y']}m")
-                print("Updating lab_waypoints.json...")
+    def tag_callback(self, msg):
+        if not msg.detections:
+            return
 
-                with open(file_path, 'w') as f:
-                    json.dump(saved_waypoints, f, indent=4)
+        for detection in msg.detections:
+            tag_id = detection.id[0]
+            tag_name = "tag_{}".format(tag_id)
 
-            except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                # The camera saw it, but the 3D math tree needs another millisecond to catch up
+            # Get depth distance from camera to tag
+            dist = detection.pose.pose.pose.position.z
+            if dist > self.distance_limit:
+                continue
+
+            try:
+                timestamp = msg.header.stamp
+                self.listener.waitForTransform("odom", tag_name, timestamp, rospy.Duration(0.05))
+                (trans, rot) = self.listener.lookupTransform("odom", tag_name, timestamp)
+
+                curr_x, curr_y = trans[0], trans[1]
+                curr_yaw = tf.transformations.euler_from_quaternion(rot)[2]
+
+                if tag_name not in self.saved_waypoints:
+                    # New tag
+                    self.saved_waypoints[tag_name] = {
+                        "x": curr_x,
+                        "y": curr_y,
+                        "yaw": curr_yaw,
+                        "count": 1,
+                        "closest_distance": round(dist, 3)
+                    }
+                    self.save_snapshot(tag_name, dist)
+                    rospy.loginfo("New tag locked: {}".format(tag_name))
+
+                else:
+                    # Update existing tag
+                    data = self.saved_waypoints[tag_name]
+                    n = data.get("count", 1)
+
+                    data["x"] += (curr_x - data["x"]) / (n + 1)
+                    data["y"] += (curr_y - data["y"]) / (n + 1)
+                    data["yaw"] = curr_yaw 
+
+                    if n < self.max_count:
+                        data["count"] = n + 1
+
+                    # Check if we have a better view for a snapshot
+                    record_dist = data.get("closest_distance", 99.0)
+                    if dist < (record_dist - 0.05):
+                        data["closest_distance"] = round(dist, 3)
+                        self.save_snapshot(tag_name, dist)
+
+            except (tf.Exception):
                 pass
 
-def map_the_tags():
-    global listener
-    rospy.init_node('dynamic_tag_mapper')
-
-    listener = tf.TransformListener()
-
-    # Give the TF listener one second to build the initial math tree
-    rospy.sleep(1.0)
-
-    print("Drive the TurtleBot around. Listening directly to the camera for ANY tag...")
-
-    # Subscribe directly to the vision pipeline
-    rospy.Subscriber("/tag_detections", AprilTagDetectionArray, detection_callback)
-
-    # Keep the script running forever, waiting for the camera to trigger the callback
-    rospy.spin()
+    def save_snapshot(self, tag_name, distance):
+        if self.latest_image is not None:
+            image_filename = os.path.join(self.snapshot_dir, "{}.jpg".format(tag_name))
+            cv2.imwrite(image_filename, self.latest_image)
+            rospy.loginfo("Saved better snapshot for {} at {}m".format(tag_name, round(distance, 2)))
 
 if __name__ == '__main__':
     try:
-        map_the_tags()
+        mapper = TagMapper()
+        rospy.spin()
     except rospy.ROSInterruptException:
         pass
