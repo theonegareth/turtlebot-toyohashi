@@ -14,8 +14,11 @@ class AirportTaxiwayDocking:
 
         # ---------------- SETTINGS ----------------
         # File paths with ROS parameters and default fallbacks
-        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json"))
-        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/snapshots/"))
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        default_json = os.path.join(script_dir, "lab_waypoints.json")
+        default_snaps = os.path.join(script_dir, "snapshots")
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(default_json))
+        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser(default_snaps))
 
         self.taxiway_distance = rospy.get_param("~taxiway_distance", 0.50)
         self.staging_distance = rospy.get_param("~staging_distance", 0.35)
@@ -26,7 +29,6 @@ class AirportTaxiwayDocking:
 
         # Minimum speeds to overcome physical floor friction
         self.min_lin_speed = rospy.get_param("~min_lin_speed", 0.08)
-        self.min_ang_speed = rospy.get_param("~min_ang_speed", 0.15)
 
         # LOWER HUB: Safely clears the right-side posts
         self.hub_x = rospy.get_param("~hub_x", -2.51)
@@ -98,9 +100,9 @@ class AirportTaxiwayDocking:
                 return True
 
             try:
-                (trans, rot) = self.listener.lookupTransform("odom", "base_footprint", rospy.Time(0))
+                (trans, rot) = self.listener.lookupTransform("map", "base_footprint", rospy.Time(0))
             except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException):
-                rospy.logwarn_throttle(2.0, "[TF ERROR] Waiting for transform from odom to base_footprint...")
+                rospy.logwarn_throttle(2.0, "[TF ERROR] Waiting for transform from map to base_footprint...")
                 continue
 
             cx, cy = trans[0], trans[1]
@@ -160,11 +162,10 @@ class AirportTaxiwayDocking:
             cmd = Twist()
 
             if not self.tag_detected:
-                if self.last_tag_z < 0.35:
-                    rospy.loginfo("[DOCK] Gate reached. Parking brakes set.")
+                if self.detection_memory_timer <= 0:
+                    rospy.loginfo("[DOCK] Tag lost. Aborting dock.")
                     self.vel_pub.publish(Twist())
                     return
-                    
                 cmd.linear.x = 0.0
                 cmd.angular.z = 0.20 * self.search_spin_dir
             else:

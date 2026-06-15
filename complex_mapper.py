@@ -302,37 +302,37 @@ class AutonomousExplorerDock:
             angle_error = math.atan2(self.target_x, self.target_z)
             dist_error = self.target_z - 0.30
 
-            if dist_error < 0.05:
-                rospy.loginfo("Dock complete. Capturing safe robot coordinates.")
-                self.visited_tags.add(self.active_target_name)
+                if dist_error < 0.05:
+                    rospy.loginfo("Dock complete. Capturing safe robot coordinates.")
 
-                try:
                     try:
-                        (trans, rot) = self.listener.lookupTransform("map", "base_footprint", rospy.Time(0))
-                    except tf.Exception:
-                        (trans, rot) = self.listener.lookupTransform("map", "base_link", rospy.Time(0))
+                        try:
+                            (trans, rot) = self.listener.lookupTransform("map", "base_footprint", rospy.Time(0))
+                        except tf.Exception:
+                            (trans, rot) = self.listener.lookupTransform("map", "base_link", rospy.Time(0))
 
-                    curr_x, curr_y = trans[0], trans[1]
-                    curr_yaw = euler_from_quaternion(rot)[2]
+                        curr_x, curr_y = trans[0], trans[1]
+                        curr_yaw = euler_from_quaternion(rot)[2]
 
-                    self.saved_waypoints[self.active_target_name] = {
-                        "x": curr_x,
-                        "y": curr_y,
-                        "yaw": curr_yaw,
-                        "distance_to_tag_when_saved": round(self.target_z, 3)
-                    }
-                    self.save_waypoints()
-                    rospy.loginfo(f"Successfully locked safe waypoint for {self.active_target_name}")
+                        self.saved_waypoints[self.active_target_name] = {
+                            "x": curr_x,
+                            "y": curr_y,
+                            "yaw": curr_yaw,
+                            "distance_to_tag_when_saved": round(self.target_z, 3)
+                        }
+                        self.save_waypoints()
+                        self.visited_tags.add(self.active_target_name)
+                        rospy.loginfo(f"Successfully locked safe waypoint for {self.active_target_name}")
 
-                    if self.latest_image is not None:
-                        cv2.imwrite(os.path.join(self.snapshot_dir, f"{self.active_target_name}.jpg"), self.latest_image)
+                        if self.latest_image is not None:
+                            cv2.imwrite(os.path.join(self.snapshot_dir, f"{self.active_target_name}.jpg"), self.latest_image)
 
-                    self.state_start_time = rospy.Time.now()
-                    self.state = "REVERSING"
+                        self.state_start_time = rospy.Time.now()
+                        self.state = "REVERSING"
 
-                except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException) as e:
-                    rospy.logwarn_throttle(1.0, f"Waiting for TF to save waypoint: {e}")
-                    return 
+                    except (tf.LookupException, tf.ConnectivityException, tf.ExtrapolationException) as e:
+                        rospy.logwarn_throttle(1.0, f"Waiting for TF to save waypoint: {e}")
+                        return
 
             else:
                 if self.front_val < 0.30:

@@ -19,25 +19,32 @@ tag_detected = False
 last_tag_x = 0.0
 last_tag_z = 999.0
 current_target_id = None
+detection_memory_timer = 0
 
 def load_waypoints():
-    file_path = os.path.expanduser("~/catkin_ws/src/lab_waypoints.json")
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    default_path = os.path.expanduser(os.path.join(script_dir, "lab_waypoints.json"))
+    file_path = rospy.get_param("~waypoint_file", default_path)
     if not os.path.exists(file_path):
-        print("[ERROR] lab_waypoints.json not found.")
+        rospy.logerr("[ERROR] lab_waypoints.json not found at: " + file_path)
         return None
     with open(file_path, 'r') as f:
         return json.load(f)
 
 def tag_callback(msg):
-    global tag_detected, last_tag_x, last_tag_z
+    global tag_detected, last_tag_x, last_tag_z, detection_memory_timer
     for det in msg.detections:
         if current_target_id is not None and det.id[0] == current_target_id:
             pose = det.pose.pose.pose
             last_tag_x = pose.position.x
             last_tag_z = pose.position.z
             tag_detected = True
+            detection_memory_timer = 5
             return
-    tag_detected = False
+    if detection_memory_timer > 0:
+        detection_memory_timer -= 1
+    else:
+        tag_detected = False
 
 def navigate_to_point(client, x, y, yaw):
     goal = MoveBaseGoal()
@@ -51,10 +58,10 @@ def navigate_to_point(client, x, y, yaw):
     goal.target_pose.pose.orientation.z = q[2]
     goal.target_pose.pose.orientation.w = q[3]
     client.send_goal(goal)
-    client.wait_for_result()
+    client.wait_for_result(rospy.Duration(60.0))
     return client.get_state() == actionlib.GoalStatus.SUCCEEDED
 
-def visual_center_and_dock(vel_pub, listener):
+def visual_center_and_dock(vel_pub):
     global tag_detected, last_tag_x, last_tag_z
     rate = rospy.Rate(10)
     
@@ -107,12 +114,13 @@ def run_navigator():
         return
     
     move_base_client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
-    move_base_client.wait_for_server()
+    if not move_base_client.wait_for_server(rospy.Duration(10.0)):
+        rospy.logerr("[ATC] move_base server not available within 10s.")
+        return
     
     vel_pub = rospy.Publisher('/cmd_vel', Twist, queue_size=10)
     rospy.Subscriber('/tag_detections', AprilTagDetectionArray, tag_callback)
     
-    listener = tf.TransformListener()
     rospy.sleep(2.0)
     
     print("Tag Navigator ready. Loading flight plan...")
@@ -132,7 +140,7 @@ def run_navigator():
         navigate_to_point(move_base_client, coords['x'], coords['y'], coords['yaw'])
         
         print(f"[CENTER] Visual centering and docking...")
-        visual_center_and_dock(vel_pub, listener)
+        visual_center_and_dock(vel_pub)
         
         rospy.sleep(2.0)
     

@@ -22,8 +22,11 @@ class TagMapper:
         self.pending_tags = {}
 
         # File paths with ROS parameters and default fallbacks
-        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json"))
-        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/snapshots/"))
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        default_json = os.path.join(script_dir, "lab_waypoints.json")
+        default_snaps = os.path.join(script_dir, "snapshots")
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(default_json))
+        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser(default_snaps))
 
         if not os.path.exists(self.snapshot_dir):
             os.makedirs(self.snapshot_dir)
@@ -126,7 +129,7 @@ class TagMapper:
                         data["count"] = n + 1
 
                     # --- PERIODIC SAVING ---
-                    if data["count"] % 10 == 0:
+                    if data["count"] % 10 == 0 and data["count"] <= self.max_count:
                         self.save_waypoints()
 
                     # Check if we have a better view for a snapshot

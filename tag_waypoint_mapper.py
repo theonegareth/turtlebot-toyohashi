@@ -21,8 +21,11 @@ class TagMapper:
         self.pending_tags = {}
 
         # File paths with ROS parameters and default fallbacks
-        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json"))
-        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/snapshots/"))
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        default_json = os.path.join(script_dir, "lab_waypoints.json")
+        default_snaps = os.path.join(script_dir, "snapshots")
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(default_json))
+        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser(default_snaps))
 
         if not os.path.exists(self.snapshot_dir):
             os.makedirs(self.snapshot_dir)
@@ -83,8 +86,8 @@ class TagMapper:
 
             try:
                 timestamp = msg.header.stamp
-                self.listener.waitForTransform("odom", tag_name, timestamp, rospy.Duration(0.05))
-                (trans, rot) = self.listener.lookupTransform("odom", tag_name, timestamp)
+                self.listener.waitForTransform("map", tag_name, timestamp, rospy.Duration(0.05))
+                (trans, rot) = self.listener.lookupTransform("map", tag_name, timestamp)
 
                 curr_x, curr_y = trans[0], trans[1]
                 curr_yaw = tf.transformations.euler_from_quaternion(rot)[2]

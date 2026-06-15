@@ -26,12 +26,18 @@ class AutonomousMapper:
         self.bridge = CvBridge()
         self.listener = tf.TransformListener()
         
-        self.json_path = os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json")
-        self.snapshot_dir = os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/snapshots/")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        default_json = os.path.join(script_dir, "lab_waypoints.json")
+        default_snaps = os.path.join(script_dir, "snapshots")
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(default_json))
+        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser(default_snaps))
         if not os.path.exists(self.snapshot_dir):
             os.makedirs(self.snapshot_dir)
+        if not os.path.exists(os.path.dirname(self.json_path)):
+            os.makedirs(os.path.dirname(self.json_path))
 
         # --- 2. Wall Following Setup ---
+        self.state = "SEARCHING"
         self.desired_dist = 0.40
         self.front_limit = 0.49
         self.kp_dist = 1.3
@@ -40,9 +46,14 @@ class AutonomousMapper:
         self.kp_yaw = 2.5
         self.current_yaw = 0.0
         self.target_yaw = None
-        self.is_pivoting = False
         self.cooldown_end_time = rospy.Time(0)
         self.front_blocked_count = 0
+        self.pivot_goal_yaw = 0.0
+
+        # LiDAR cached values
+        self.front_val = 10.0
+        self.right_val = 10.0
+        self.right_corner = 10.0
 
         # --- 3. Completion Tracking ---
         self.start_x = None
@@ -62,6 +73,7 @@ class AutonomousMapper:
         rospy.Subscriber("/tag_detections_image", Image, self.image_callback)
 
         rospy.on_shutdown(self.save_waypoints)
+        rospy.Timer(rospy.Duration(0.1), self.control_loop)
         rospy.loginfo("Autonomous Mapper Started: Following walls and searching for tags.")
 
     # ===== MAPPING LOGIC =====
@@ -124,9 +136,13 @@ class AutonomousMapper:
             cv2.imwrite(filename, self.latest_image)
 
     def save_waypoints(self):
-        with open(self.json_path, 'w') as f:
-            json.dump(self.saved_waypoints, f, indent=4)
-        rospy.loginfo("Waypoints saved to JSON.")
+        try:
+            os.makedirs(os.path.dirname(self.json_path), exist_ok=True)
+            with open(self.json_path, 'w') as f:
+                json.dump(self.saved_waypoints, f, indent=4)
+            rospy.loginfo("Waypoints saved to JSON.")
+        except IOError as e:
+            rospy.logerr(f"Failed to save waypoints: {e}")
 
     # ===== NAVIGATION LOGIC =====
 
@@ -159,6 +175,13 @@ class AutonomousMapper:
             self.mapping_complete = True
 
     def scan_callback(self, msg):
+        ranges = list(msg.ranges)
+        num = len(ranges)
+        self.front_val = ranges[0] if ranges[0] > 0.05 else 10.0
+        self.right_val = ranges[int(3*num/4)] if ranges[int(3*num/4)] > 0.02 else 10.0
+        self.right_corner = ranges[int(7*num/8)] if ranges[int(7*num/8)] > 0.02 else 10.0
+
+    def control_loop(self, event):
         if self.mapping_complete:
             cmd = Twist()
             cmd.linear.x = 0.0
@@ -167,70 +190,58 @@ class AutonomousMapper:
             rospy.loginfo_throttle(5, "PERIMETER COMPLETE: Returned to start point. Stopping.")
             return
 
-        if self.target_yaw is None or self.is_pivoting:
+        if self.target_yaw is None:
             return
 
-        ranges = list(msg.ranges)
-        num = len(ranges)
-        
-        front_val = ranges[0] if ranges[0] > 0.05 else 10.0
-        right = ranges[int(3*num/4)] if ranges[int(3*num/4)] > 0.02 else 10.0
-        right_corner = ranges[int(7*num/8)] if ranges[int(7*num/8)] > 0.02 else 10.0
-
-        if rospy.Time.now() < self.cooldown_end_time:
-            front_val = 10.0
-
-        if front_val < self.front_limit:
-            self.front_blocked_count += 1
-        else:
-            self.front_blocked_count = 0
-
-        self.wall_follow_logic(front_val, right, right_corner, (self.front_blocked_count >= 3))
-
-    def wall_follow_logic(self, front, right, right_corner, trigger_pivot):
         cmd = Twist()
 
-        if trigger_pivot:
-            self.is_pivoting = True
-            cmd.linear.x = 0.0
-            self.cmd_pub.publish(cmd)
-            rospy.sleep(0.5)
+        if self.state == "SEARCHING":
+            effective_front = self.front_val
+            if rospy.Time.now() < self.cooldown_end_time:
+                effective_front = 10.0
 
-            goal_yaw = self.current_yaw + (math.pi / 2.0)
-            if goal_yaw > math.pi: goal_yaw -= 2.0 * math.pi
-            
-            rate = rospy.Rate(20)
-            while not rospy.is_shutdown():
-                error = goal_yaw - self.current_yaw
-                if error > math.pi: error -= 2.0 * math.pi
-                if error < -math.pi: error += 2.0 * math.pi
-                if abs(error) <= 0.06: 
-                    break
+            if effective_front < self.front_limit:
+                self.front_blocked_count += 1
+            else:
+                self.front_blocked_count = 0
 
+            if self.front_blocked_count >= 3:
+                rospy.loginfo("FRONT BLOCKED: Pivoting 90 deg.")
+                self.state = "PIVOTING"
+                goal_yaw = self.current_yaw + (math.pi / 2.0)
+                if goal_yaw > math.pi: goal_yaw -= 2.0 * math.pi
+                self.pivot_goal_yaw = goal_yaw
+                self.front_blocked_count = 0
+                return
+
+            if self.right_corner < 0.18:
+                cmd.linear.x = 0.05
                 cmd.angular.z = 0.5
-                self.cmd_pub.publish(cmd)
-                rate.sleep()
+            else:
+                dist_error = self.desired_dist - self.right_val
+                d_error = dist_error - self.prev_dist_error
+                self.prev_dist_error = dist_error
 
-            self.target_yaw = self.current_yaw
-            self.cooldown_end_time = rospy.Time.now() + rospy.Duration(1.5)
-            self.is_pivoting = False
-            return
+                yaw_error = self.target_yaw - self.current_yaw
+                if yaw_error > math.pi: yaw_error -= 2*math.pi
+                if yaw_error < -math.pi: yaw_error += 2*math.pi
 
-        if right_corner < 0.18:
-            cmd.linear.x = 0.05
-            cmd.angular.z = 0.5
-        else:
-            dist_error = self.desired_dist - right
-            d_error = dist_error - self.prev_dist_error
-            self.prev_dist_error = dist_error
-            
-            yaw_error = self.target_yaw - self.current_yaw
-            if yaw_error > math.pi: yaw_error -= 2*math.pi
-            if yaw_error < -math.pi: yaw_error += 2*math.pi
+                correction = (self.kp_dist * dist_error) + (self.kd_dist * d_error) + (self.kp_yaw * yaw_error)
+                cmd.linear.x = 0.08
+                cmd.angular.z = max(min(correction, 0.6), -0.6)
 
-            correction = (self.kp_dist * dist_error) + (self.kd_dist * d_error) + (self.kp_yaw * yaw_error)
-            cmd.linear.x = 0.08
-            cmd.angular.z = max(min(correction, 0.6), -0.6)
+        elif self.state == "PIVOTING":
+            error = self.pivot_goal_yaw - self.current_yaw
+            if error > math.pi: error -= 2.0 * math.pi
+            if error < -math.pi: error += 2.0 * math.pi
+
+            if abs(error) <= 0.06:
+                rospy.loginfo("Pivot done. Cool-down active: Ignoring front for 1.5s.")
+                self.target_yaw = self.current_yaw
+                self.cooldown_end_time = rospy.Time.now() + rospy.Duration(1.5)
+                self.state = "SEARCHING"
+            else:
+                cmd.angular.z = 0.5
 
         self.cmd_pub.publish(cmd)
 

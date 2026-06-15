@@ -37,7 +37,8 @@ class AutonomousExplorerDock:
         self.saved_waypoints = {}
         self.bridge = CvBridge()
         self.listener = tf.TransformListener()
-        self.json_path = os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(os.path.join(script_dir, "lab_waypoints.json")))
 
         # --- Thresholds & Timers ---
         self.desired_dist = 0.40
@@ -182,6 +183,11 @@ class AutonomousExplorerDock:
                 self.state = "REALIGNING"
 
         elif self.state == "REALIGNING":
+            if self.pre_dock_yaw is None:
+                self.target_yaw = self.current_yaw
+                self.state = "SEARCHING"
+                self.cmd_pub.publish(cmd)
+                return
             error = self.pre_dock_yaw - self.current_yaw
             while error > math.pi: error -= 2.0 * math.pi
             while error < -math.pi: error += 2.0 * math.pi
@@ -204,9 +210,11 @@ class AutonomousExplorerDock:
 
     def save_waypoints(self):
         try:
+            os.makedirs(os.path.dirname(self.json_path), exist_ok=True)
             with open(self.json_path, 'w') as f:
                 json.dump(self.saved_waypoints, f, indent=4)
-        except: pass
+        except IOError as e:
+            rospy.logerr(f"Failed to save waypoints: {e}")
 
 if __name__ == "__main__":
     try:

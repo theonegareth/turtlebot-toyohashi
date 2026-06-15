@@ -17,7 +17,8 @@ class Nav2Navigator:
     def __init__(self):
         rospy.init_node('nav2_navigator', anonymous=True)
 
-        self.json_path = os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(os.path.join(script_dir, "lab_waypoints.json")))
         self.staging_distance = 0.85
         self.desired_distance = 0.25
         self.wall_safety_threshold = 0.18

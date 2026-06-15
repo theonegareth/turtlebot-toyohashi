@@ -16,7 +16,8 @@ class Nav2Navigator:
     def __init__(self):
         rospy.init_node('nav2_navigator', anonymous=True)
 
-        self.json_path = os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(os.path.join(script_dir, "lab_waypoints.json")))
         self.staging_distance = 0.55 
         self.desired_distance = 0.25 
         
@@ -36,7 +37,9 @@ class Nav2Navigator:
 
         self.nav_client = actionlib.SimpleActionClient('move_base', MoveBaseAction)
         rospy.loginfo("[ATC] Waiting for move_base...")
-        self.nav_client.wait_for_server()
+        if not self.nav_client.wait_for_server(rospy.Duration(10.0)):
+            rospy.logerr("[ATC] move_base server not available within 10s.")
+            raise rospy.ROSException("move_base unavailable")
         rospy.loginfo("[ATC] Online.")
 
     def tag_callback(self, msg):
@@ -67,7 +70,8 @@ class Nav2Navigator:
         while not rospy.is_shutdown():
             cmd = Twist()
             if not self.tag_detected:
-                if self.last_tag_z < 0.35: return 
+                if self.detection_memory_timer <= 0:
+                    return
                 cmd.angular.z = 0.2 * self.search_spin_dir
             else:
                 angle_error = math.atan2(self.last_tag_x, self.last_tag_z)
@@ -120,10 +124,13 @@ class Nav2Navigator:
         rospy.sleep(0.8) # Wait for path clearing in RViz
 
         if not self.tag_detected:
-            # Simple rotation to find tag
-            while not self.tag_detected and not rospy.is_shutdown():
+            deadline = rospy.Time.now() + rospy.Duration(8.0)
+            while not self.tag_detected and not rospy.is_shutdown() and rospy.Time.now() < deadline:
                 cmd = Twist(); cmd.angular.z = 0.3; self.vel_pub.publish(cmd)
                 rospy.sleep(0.1)
+            if not self.tag_detected:
+                rospy.logwarn("[SEARCH] Timed out while trying to reacquire tag.")
+                return
         
         self.visual_dock()
 

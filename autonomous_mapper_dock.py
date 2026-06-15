@@ -35,10 +35,15 @@ class AutonomousExplorerDock:
         self.bridge = CvBridge()
         self.listener = tf.TransformListener()
         
-        self.json_path = os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/lab_waypoints.json")
-        self.snapshot_dir = os.path.expanduser("~/bnus_ws/src/cam_aprtag/scripts/snapshots/")
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        default_json = os.path.join(script_dir, "lab_waypoints.json")
+        default_snaps = os.path.join(script_dir, "snapshots")
+        self.json_path = rospy.get_param("~waypoint_file", os.path.expanduser(default_json))
+        self.snapshot_dir = rospy.get_param("~snapshot_dir", os.path.expanduser(default_snaps))
         if not os.path.exists(self.snapshot_dir):
             os.makedirs(self.snapshot_dir)
+        if not os.path.exists(os.path.dirname(self.json_path)):
+            os.makedirs(os.path.dirname(self.json_path))
 
         # --- Wall Following Setup ---
         self.desired_dist = 0.40
@@ -178,9 +183,13 @@ class AutonomousExplorerDock:
                     pass
 
     def save_waypoints(self):
-        with open(self.json_path, 'w') as f:
-            json.dump(self.saved_waypoints, f, indent=4)
-        rospy.loginfo("Waypoints saved to JSON.")
+        try:
+            os.makedirs(os.path.dirname(self.json_path), exist_ok=True)
+            with open(self.json_path, 'w') as f:
+                json.dump(self.saved_waypoints, f, indent=4)
+            rospy.loginfo("Waypoints saved to JSON.")
+        except IOError as e:
+            rospy.logerr(f"Failed to save waypoints: {e}")
 
     def control_loop(self, event):
         cmd = Twist()
@@ -272,6 +281,10 @@ class AutonomousExplorerDock:
                 self.state = "REALIGNING"
 
         elif self.state == "REALIGNING":
+            if self.pre_dock_yaw is None:
+                self.target_yaw = self.current_yaw
+                self.state = "SEARCHING"
+                return
             error = self.pre_dock_yaw - self.current_yaw
             if error > math.pi: error -= 2.0 * math.pi
             if error < -math.pi: error += 2.0 * math.pi
