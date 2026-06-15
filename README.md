@@ -16,7 +16,7 @@ ROS Noetic navigation system for TurtleBot3 with AprilTag-based waypoint mapping
 
 - **tag_navigator.py** - Sequential waypoint navigator that drives to saved AprilTag waypoints and finishes with visual centering/docking.
 
-- **tag_waypoint_mapper.py** - Basic AprilTag waypoint mapper using `odom -> tag_*` TF.
+- **tag_waypoint_mapper.py** - Basic AprilTag waypoint mapper using `map -> tag_*` TF.
 
 - **tag_waypoint_slam.py** - SLAM-aware waypoint mapper using `map -> tag_*` TF for waypoint persistence.
 
@@ -73,6 +73,27 @@ rosrun turtlebot_toyohashi tag_radar.py
 ```
 
 ## Configuration
+
+All scripts default to storing and reading `lab_waypoints.json` from the same directory as the script itself. Override via ROS params:
+
+```bash
+rosrun turtlebot_toyohashi tag_waypoint_mapper.py _waypoint_file:=/path/to/my_waypoints.json _snapshot_dir:=/path/to/snapshots
+```
+
+**Supported parameters** (all scripts):
+
+| Parameter | Default | Applies to |
+|-----------|---------|------------|
+| `~waypoint_file` | `<script_dir>/lab_waypoints.json` | All navigators and mappers |
+| `~snapshot_dir` | `<script_dir>/snapshots/` | Mappers (`tag_waypoint_mapper.py`, `tag_waypoint_slam.py`, `odometry_navigator.py`, `autonomous_mapper*.py`) |
+| `~k_ang` | varies | Navigation controllers |
+| `~k_lin` | varies | Navigation controllers |
+| `~desired_distance` | varies | Docking controllers |
+| `~min_lin_speed` | 0.08 | `odometry_navigator.py` |
+| `~taxiway_distance` | 0.50 | `odometry_navigator.py` |
+| `~staging_distance` | 0.35 | `odometry_navigator.py` |
+| `~hub_x` | -2.51 | `odometry_navigator.py` |
+| `~hub_y` | -0.80 | `odometry_navigator.py` |
 
 Waypoint positions are stored in `lab_waypoints.json`.
 
