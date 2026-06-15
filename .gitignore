@@ -17,3 +17,7 @@ catkin_generated/
 # OS
 .DS_Store
 Thumbs.db
+
+# Project documentation and drafts (large files with embedded images, WIP)
+Turtlebot Documentation.md
+IC2IE_2026_Paper_Draft.md
